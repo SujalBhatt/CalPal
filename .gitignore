@@ -1,0 +1,35 @@
+# Python virtual environments
+venv/
+.venv/
+backend/venv/
+backend/.venv/
+frontend/venv/
+frontend/.venv/
+
+# Credentials and secrets
+service_account.json
+.env
+backend/.env
+frontend/.env
+
+# System/OS files
+.DS_Store
+Thumbs.db
+
+# Logs and backups
+*.log
+*.bak
+*.old
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# IDE/editor config (optional, uncomment as needed)
+#.vscode/
+#.idea/
+
+# Streamlit cache
+frontend/.streamlit/ 
