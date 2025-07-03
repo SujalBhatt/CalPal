@@ -7,3 +7,4 @@ google-auth-oauthlib
 langchain
 google-generativeai
 python-dotenv 
+pytz
