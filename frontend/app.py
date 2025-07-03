@@ -314,7 +314,7 @@ if send_clicked and user_input.strip():
     st.session_state["messages"].append({"role": "user", "content": user_input.strip()})
     try:
         response = requests.post(
-            "http://localhost:8000/chat",
+            "https://pure-celebration-production-0dde.up.railway.app/chat",
             json={"message": user_input.strip()},
             timeout=30
         )
