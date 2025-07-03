@@ -323,4 +323,4 @@ if send_clicked and user_input.strip():
     except Exception as e:
         bot_reply = f"Error: {e}"
     st.session_state["messages"].append({"role": "assistant", "content": bot_reply})
-    st.experimental_rerun() 
+    st.rerun() 
