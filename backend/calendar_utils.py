@@ -12,7 +12,12 @@ SERVICE_ACCOUNT_FILE = os.path.join(os.path.dirname(__file__), '../service_accou
 TEST_CALENDAR_ID = os.getenv('GOOGLE_CALENDAR_ID', 'primary')
 
 def get_calendar_service():
-    service_account_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
+    json_env = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+    if json_env:
+        service_account_info = json.loads(json_env)
+    else:
+        with open(os.path.join(os.path.dirname(__file__), '../service_account.json')) as f:
+            service_account_info = json.load(f)
     credentials = service_account.Credentials.from_service_account_info(
         service_account_info, scopes=SCOPES)
     service = build('calendar', 'v3', credentials=credentials)
@@ -20,6 +25,12 @@ def get_calendar_service():
 
 def get_free_slots(start_time, end_time, duration_minutes=30):
     service = get_calendar_service()
+    # Ensure start_time and end_time are timezone-aware
+    local_tz = pytz.timezone('Asia/Kolkata')
+    if start_time.tzinfo is None:
+        start_time = local_tz.localize(start_time)
+    if end_time.tzinfo is None:
+        end_time = local_tz.localize(end_time)
     # Convert to UTC and remove tzinfo for ISO format, then add 'Z' for Google API
     start_utc = start_time.astimezone(datetime.timezone.utc).replace(tzinfo=None)
     end_utc = end_time.astimezone(datetime.timezone.utc).replace(tzinfo=None)
@@ -51,6 +62,11 @@ def get_free_slots(start_time, end_time, duration_minutes=30):
     current = start_time
     while current + datetime.timedelta(minutes=duration_minutes) <= end_time:
         next_slot_end = current + datetime.timedelta(minutes=duration_minutes)
+        # Ensure current and next_slot_end are timezone-aware
+        if current.tzinfo is None:
+            current = local_tz.localize(current)
+        if next_slot_end.tzinfo is None:
+            next_slot_end = local_tz.localize(next_slot_end)
         overlap = False
         for b_start, b_end in busy:
             if (current < b_end and next_slot_end > b_start):

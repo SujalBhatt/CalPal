@@ -138,16 +138,24 @@ def extract_booking_info(user_message):
     print(f"Final extracted info: {info}")  # Debug print
     return info
 
-def chat_with_agent(user_message):
+def chat_with_agent(user_message, history=None):
     import json
     global current_key_index, model
     current_date = datetime.datetime.now().strftime('%Y-%m-%d')
     current_day = datetime.datetime.now().strftime('%A')
 
+    # Build conversation context if history is provided
+    conversation = ""
+    if history:
+        for msg in history[-6:]:  # Use last 6 turns (user/bot)
+            role = "User" if msg["role"] == "user" else "Bot"
+            conversation += f"{role}: {msg['content']}\n"
+    conversation += f"User: {user_message}\nBot:"
+
     prompt = f"""
 You are CalPal, a smart AI calendar assistant. Today is {current_date} ({current_day}).
 
-Classify the user's message and extract any useful information.
+You are having a conversation with a user. Continue the conversation naturally, keeping context from previous turns. If the user wants to book, check, or ask about calendar events, extract and respond as before. If the user is just chatting, reply in a friendly, conversational way as CalPal, referencing previous messages if relevant.
 
 ### INTENT types:
 - "book" → user wants to schedule an appointment.
@@ -162,7 +170,7 @@ Classify the user's message and extract any useful information.
 - date → in YYYY-MM-DD format (resolve "tomorrow", "next Monday", etc. using today's date).
 - start_time / end_time → in 24h format (HH:MM), assume 1 hour duration if only start_time is provided.
 
-Respond ONLY in JSON like this:
+Respond ONLY in JSON like this for booking/slots/availability:
 {{
   "intent": "...",
   "summary": "...",
@@ -171,7 +179,10 @@ Respond ONLY in JSON like this:
   "end_time": "..."
 }}
 
-User message: {user_message}
+If the user is just chatting, reply as CalPal in natural language.
+
+Conversation so far:
+{conversation}
 """
 
     # Handle key rotation
@@ -193,26 +204,36 @@ User message: {user_message}
     raw = response.text.strip()
     start = raw.find('{')
     end = raw.rfind('}') + 1
-    if start == -1 or end == -1:
-        return "Sorry, I couldn't understand your request."
-
-    try:
-        parsed = json.loads(raw[start:end])
-    except Exception as e:
-        print("JSON parsing error:", e)
-        return "Sorry, I couldn't understand that. Could you rephrase?"
-
-    intent = parsed.get("intent", "unknown")
-    summary = parsed.get("summary")
-    date_str = parsed.get("date")
-    start_time = parsed.get("start_time")
-    end_time = parsed.get("end_time")
+    # If JSON found, parse as before
+    if start != -1 and end != -1:
+        try:
+            parsed = json.loads(raw[start:end])
+            intent = parsed.get("intent", "unknown")
+            summary = parsed.get("summary")
+            date_str = parsed.get("date")
+            start_time = parsed.get("start_time")
+            end_time = parsed.get("end_time")
+        except Exception as e:
+            print("JSON parsing error:", e)
+            parsed = None
+            intent = "unknown"
+    else:
+        parsed = None
+        intent = "unknown"
 
     # For easier conversion
     local_tz = pytz.timezone('Asia/Kolkata')
 
-    if intent == "smalltalk":
-        return "Hi! I'm CalPal — your calendar assistant. Need help finding or booking a slot?"
+    if parsed and intent == "smalltalk":
+        # If Gemini returns a JSON for smalltalk, fallback to natural language
+        return raw[end:].strip() or "Hi! I'm CalPal — your calendar assistant. Need help finding or booking a slot?"
+    if not parsed or intent == "unknown":
+        # If not a booking/slots/availability intent, treat as chat
+        # Return the non-JSON part of the response (natural language)
+        chat_reply = raw[end:].strip()
+        if not chat_reply:
+            chat_reply = raw[:start].strip()
+        return chat_reply or "I'm here to help!"
 
     if intent == "ask_slots" and date_str:
         day = datetime.datetime.strptime(date_str, '%Y-%m-%d')

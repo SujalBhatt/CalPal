@@ -196,11 +196,15 @@ st.markdown(
         box-shadow: 0 0 8px #a259ff44;
         padding: 0.7rem 1.1rem;
         outline: none;
-        transition: border 0.2s, box-shadow 0.2s;
+        transition: border 0.2s, box-shadow 0.2s, background 0.2s;
     }}
     .custom-input-box:focus {{
         border: 2px solid #00c3ff;
         box-shadow: 0 0 16px #00c3ff88;
+        background: #232526;
+    }}
+    .custom-input-box.not-empty {{
+        background: #232526;
     }}
     .custom-send-btn {{
         background: linear-gradient(90deg, #a259ff 0%, #00c3ff 100%);
@@ -282,6 +286,29 @@ with st.form(key="custom-chat-form", clear_on_submit=True):
             key="input_box",
             label_visibility="collapsed",
         )
+        # Add dynamic styling for input box
+        user_input_class = "custom-input-box"
+        if user_input and user_input.strip():
+            user_input_class += " not-empty"
+        st.markdown(f"""
+            <style>
+            .custom-input-box {{ background: #181828; }}
+            .custom-input-box:focus, .custom-input-box.not-empty {{ background: #232526 !important; }}
+            </style>
+            <script>
+            const input = window.parent.document.querySelector('input[data-testid="stTextInput"]');
+            if (input) {{
+                input.classList.add('{user_input_class}');
+                input.addEventListener('input', function() {{
+                    if (this.value) {{
+                        this.classList.add('not-empty');
+                    }} else {{
+                        this.classList.remove('not-empty');
+                    }}
+                }});
+            }}
+            </script>
+        """, unsafe_allow_html=True)
     with col2:
         send_clicked = st.form_submit_button(
             label="\U0001F680",  # Rocket emoji
@@ -314,19 +341,34 @@ with st.form(key="custom-chat-form", clear_on_submit=True):
         unsafe_allow_html=True
     )
 
-BACKEND_URL = os.getenv("BACKEND_URL")
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000/chat")
+
+# Add a session state flag for bot thinking
+if "bot_thinking" not in st.session_state:
+    st.session_state["bot_thinking"] = False
 
 if send_clicked and user_input.strip():
     st.session_state["messages"].append({"role": "user", "content": user_input.strip()})
-    try:
-        response = requests.post(
-            BACKEND_URL,
-            json={"message": user_input.strip()},
-            timeout=30
-        )
-        response.raise_for_status()
-        bot_reply = response.json().get("response", "(No response)")
-    except Exception as e:
-        bot_reply = f"Error: {e}"
-    st.session_state["messages"].append({"role": "assistant", "content": bot_reply})
-    st.rerun() 
+    st.session_state["bot_thinking"] = True
+    st.rerun()
+
+# Show 'Bot is thinking...' indicator if bot_thinking is True and last message is from user
+if st.session_state.get("bot_thinking", False):
+    if st.session_state["messages"] and st.session_state["messages"][-1]["role"] == "user":
+        st.markdown('<div style="text-align:center; color:#a259ff; font-size:1.2rem; margin:1.5rem 0;">🤖 Bot is thinking...</div>', unsafe_allow_html=True)
+        # Try to get bot reply
+        try:
+            # Send conversation history (excluding the last user message) for context
+            history = st.session_state["messages"][:-1]
+            response = requests.post(
+                BACKEND_URL,
+                json={"message": st.session_state["messages"][-1]["content"], "history": history},
+                timeout=30
+            )
+            response.raise_for_status()
+            bot_reply = response.json().get("response", "(No response)")
+        except Exception as e:
+            bot_reply = f"Error: {e}"
+        st.session_state["messages"].append({"role": "assistant", "content": bot_reply})
+        st.session_state["bot_thinking"] = False
+        st.rerun() 
