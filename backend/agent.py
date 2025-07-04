@@ -139,142 +139,143 @@ def extract_booking_info(user_message):
     return info
 
 def chat_with_agent(user_message):
-    """
-    Optimized: Single Gemini call to handle both booking and chat, with API key rotation.
-    """
+    import json
     global current_key_index, model
     current_date = datetime.datetime.now().strftime('%Y-%m-%d')
     current_day = datetime.datetime.now().strftime('%A')
+
     prompt = f"""
-    You are CalPal, an AI calendar assistant. Today is {current_date} ({current_day}).
-    
-    Analyze the user's message and do the following:
-    1. If the user wants to book or schedule an appointment/meeting/event, extract:
-        - summary (what the event is about)
-        - date (YYYY-MM-DD, calculate relative dates like 'tomorrow' or 'next Monday' based on today)
-        - start_time (24h format, HH:MM, convert from 12h if needed)
-        - end_time (24h format, HH:MM, assume 1 hour if not specified)
-        Respond ONLY in JSON with these keys: summary, date, start_time, end_time. If any info is missing, use null.
-    2. If the user is just chatting or not booking, respond with a friendly, conversational reply as CalPal.
-    
-    User message: {user_message}
-    
-    Examples:
-    - "Book me a meeting with John tomorrow at 2pm" → {{"summary": "Meeting with John", "date": "{current_date} + 1 day", "start_time": "14:00", "end_time": "15:00"}}
-    - "I need to book a doctor's appointment for next Monday at 11am" → {{"summary": "doctor's appointment", "date": "(next Monday)", "start_time": "11:00", "end_time": "12:00"}}
-    - "Hi, how are you?" → Friendly, conversational reply as CalPal.
-    """
+You are CalPal, a smart AI calendar assistant. Today is {current_date} ({current_day}).
+
+Classify the user's message and extract any useful information.
+
+### INTENT types:
+- "book" → user wants to schedule an appointment.
+- "check_availability" → user is asking if a time is free (but not booking).
+- "ask_slots" → user wants to know all available slots for a day.
+- "confirm_booking" → user is confirming an earlier suggested time.
+- "smalltalk" → general conversation or greeting.
+- "unknown" → intent is unclear.
+
+### Extraction goals:
+- summary → short title of the event.
+- date → in YYYY-MM-DD format (resolve "tomorrow", "next Monday", etc. using today's date).
+- start_time / end_time → in 24h format (HH:MM), assume 1 hour duration if only start_time is provided.
+
+Respond ONLY in JSON like this:
+{{
+  "intent": "...",
+  "summary": "...",
+  "date": "...",
+  "start_time": "...",
+  "end_time": "..."
+}}
+
+User message: {user_message}
+"""
+
+    # Handle key rotation
     for _ in range(len(GEMINI_API_KEYS)):
         try:
             if model is None:
                 set_gemini_key(current_key_index)
-            if model is None:
-                raise RuntimeError("Gemini model could not be initialized")
             response = model.generate_content(prompt)
             break
         except Exception as e:
             if 'quota' in str(e).lower() or '429' in str(e):
                 current_key_index = (current_key_index + 1) % len(GEMINI_API_KEYS)
                 set_gemini_key(current_key_index)
-                continue  # Try next key
+                continue
             else:
                 print(f"Gemini API error: {e}")
-                return "Sorry, an error occurred with the AI assistant. Please try again later."
-    else:
-        return "Sorry, all API keys have reached their quota. Please try again tomorrow!"
-    print('Gemini unified response:', response.text)
-    import json
+                return "Sorry, I had trouble processing your request."
+
     raw = response.text.strip()
-    # Try to find JSON object in the response
     start = raw.find('{')
     end = raw.rfind('}') + 1
-    if start != -1 and end != 0:
-        json_str = raw[start:end]
-        try:
-            info = json.loads(json_str)
-            print(f"Parsed JSON: {info}")
-            # If at least one booking field is not null, treat as booking
-            if any(info.get(k) for k in ['summary', 'date', 'start_time', 'end_time']):
-                # Only ask for missing date, start_time, or end_time
-                missing = [k for k in ['date', 'start_time', 'end_time'] if not info.get(k)]
-                # If only date is present, list all available slots for that day
-                if info.get('date') and not info.get('start_time') and not info.get('end_time'):
-                    day = datetime.datetime.strptime(info['date'], '%Y-%m-%d')
-                    start_dt = day.replace(hour=8, minute=0)
-                    end_dt = day.replace(hour=20, minute=0)
-                    free_slots = get_free_slots(start_dt, end_dt, 60)  # 60 min slots
-                    if free_slots:
-                        suggestions = '\n'.join([
-                            f"- {slot[0].strftime('%I:%M %p')} to {slot[1].strftime('%I:%M %p')}" for slot in free_slots
-                        ])
-                        return f"Here are the available slots for {info['date']} (1 hour each):\n{suggestions}"
-                    else:
-                        return f"Sorry, there are no free slots available for {info['date']}."
-                if missing:
-                    missing_str = ', '.join(missing)
-                    return f"To book your appointment, please provide: {missing_str}."
-                # If summary is missing, use a default
-                if not info.get('summary'):
-                    info['summary'] = 'Appointment'
-                # All info present, try to book
-                try:
-                    start_dt = datetime.datetime.fromisoformat(f"{info['date']}T{info['start_time']}")
-                    end_dt = datetime.datetime.fromisoformat(f"{info['date']}T{info['end_time']}")
-                except Exception:
-                    return "Sorry, I couldn't understand the date or time. Please use YYYY-MM-DD for date and HH:MM for time."
-                # Ensure start_dt and end_dt are timezone-aware
-                local_tz = pytz.timezone('Asia/Kolkata')
-                if start_dt.tzinfo is None:
-                    start_dt = local_tz.localize(start_dt)
-                if end_dt.tzinfo is None:
-                    end_dt = local_tz.localize(end_dt)
-                # Fetch all events for the day for conflict checking
-                service = get_calendar_service()
-                day_start = start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-                day_end = start_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
-                events_result = service.events().list(
-                    calendarId=TEST_CALENDAR_ID,
-                    timeMin=day_start.isoformat(),
-                    timeMax=day_end.isoformat(),
-                    singleEvents=True,
-                    orderBy='startTime'
-                ).execute()
-                events = events_result.get('items', [])
-                for event in events:
-                    ev_start = event['start'].get('dateTime', event['start'].get('date'))
-                    ev_end = event['end'].get('dateTime', event['end'].get('date'))
-                    if ev_start and ev_end:
-                        ev_start_dt = datetime.datetime.fromisoformat(ev_start.replace('Z','+00:00'))
-                        ev_end_dt = datetime.datetime.fromisoformat(ev_end.replace('Z','+00:00'))
-                        # Ensure event datetimes are timezone-aware
-                        if ev_start_dt.tzinfo is None:
-                            ev_start_dt = local_tz.localize(ev_start_dt)
-                        if ev_end_dt.tzinfo is None:
-                            ev_end_dt = local_tz.localize(ev_end_dt)
-                        if (start_dt < ev_end_dt and end_dt > ev_start_dt):
-                            # Suggest alternative slots (use slot[0] and slot[1] ONLY)
-                            slot_duration = (end_dt - start_dt).seconds // 60
-                            free_slots = get_free_slots(start_dt.replace(hour=8, minute=0), start_dt.replace(hour=20, minute=0), slot_duration)
-                            suggestions = '\n'.join([
-                                f"- {slot[0].strftime('%Y-%m-%d %I:%M %p')} to {slot[1].strftime('%I:%M %p')}" for slot in free_slots[:3]
-                            ])
-                            return f"That time slot is already booked. Here are some other available slots:\n{suggestions if suggestions else 'No free slots available today.'}"
-                event = create_event(info['summary'], start_dt, end_dt)
-                return f"Your appointment '{info['summary']}' is booked for {info['date']} from {info['start_time']} to {info['end_time']}!"
-            else:
-                # Not a booking, treat as chat
-                # Remove any JSON from the response and return the rest
-                chat_reply = raw[end:].strip()
-                if not chat_reply:
-                    chat_reply = raw[:start].strip()
-                return chat_reply or "I'm here to help!"
-        except Exception as e:
-            print(f"JSON parsing error: {e}")
-            # If parsing fails, treat as chat
-            chat_reply = raw[end:].strip()
-            if not chat_reply:
-                chat_reply = raw[:start].strip()
-            return chat_reply or "I'm here to help!"
-    else:
-        # No JSON found, treat as chat
-        return raw or "I'm here to help!" 
+    if start == -1 or end == -1:
+        return "Sorry, I couldn't understand your request."
+
+    try:
+        parsed = json.loads(raw[start:end])
+    except Exception as e:
+        print("JSON parsing error:", e)
+        return "Sorry, I couldn't understand that. Could you rephrase?"
+
+    intent = parsed.get("intent", "unknown")
+    summary = parsed.get("summary")
+    date_str = parsed.get("date")
+    start_time = parsed.get("start_time")
+    end_time = parsed.get("end_time")
+
+    # For easier conversion
+    local_tz = pytz.timezone('Asia/Kolkata')
+
+    if intent == "smalltalk":
+        return "Hi! I'm CalPal — your calendar assistant. Need help finding or booking a slot?"
+
+    if intent == "ask_slots" and date_str:
+        day = datetime.datetime.strptime(date_str, '%Y-%m-%d')
+        start_dt = day.replace(hour=8, minute=0)
+        end_dt = day.replace(hour=20, minute=0)
+        slots = get_free_slots(start_dt, end_dt, 60)
+        if slots:
+            reply = f"Here are 1-hour slots available on {date_str}:\n"
+            reply += "\n".join([f"- {s[0].strftime('%I:%M %p')} to {s[1].strftime('%I:%M %p')}" for s in slots])
+        else:
+            reply = f"Sorry, no free 1-hour slots available on {date_str}."
+        return reply
+
+    if intent == "check_availability" and date_str and start_time and end_time:
+        start_dt = local_tz.localize(datetime.datetime.fromisoformat(f"{date_str}T{start_time}"))
+        end_dt = local_tz.localize(datetime.datetime.fromisoformat(f"{date_str}T{end_time}"))
+        service = get_calendar_service()
+        events = service.events().list(
+            calendarId=TEST_CALENDAR_ID,
+            timeMin=start_dt.isoformat(),
+            timeMax=end_dt.isoformat(),
+            singleEvents=True,
+            orderBy='startTime'
+        ).execute().get('items', [])
+
+        if events:
+            return f"❌ That time slot ({start_time}–{end_time}) on {date_str} is already booked."
+        else:
+            return f"✅ Yes, {start_time} to {end_time} on {date_str} is available."
+
+    if intent == "confirm_booking" or intent == "book":
+        if not all([date_str, start_time]):
+            return "To book your appointment, please tell me the date and start time."
+
+        if not end_time:
+            # Default 1 hour
+            start_dt = datetime.datetime.fromisoformat(f"{date_str}T{start_time}")
+            end_dt = (start_dt + datetime.timedelta(hours=1)).strftime('%H:%M')
+            end_time = end_dt
+
+        start_dt = local_tz.localize(datetime.datetime.fromisoformat(f"{date_str}T{start_time}"))
+        end_dt = local_tz.localize(datetime.datetime.fromisoformat(f"{date_str}T{end_time}"))
+
+        # Check conflicts
+        service = get_calendar_service()
+        events = service.events().list(
+            calendarId=TEST_CALENDAR_ID,
+            timeMin=start_dt.isoformat(),
+            timeMax=end_dt.isoformat(),
+            singleEvents=True,
+            orderBy='startTime'
+        ).execute().get('items', [])
+
+        if events:
+            alt_slots = get_free_slots(
+                start_dt.replace(hour=8, minute=0),
+                start_dt.replace(hour=20, minute=0),
+                (end_dt - start_dt).seconds // 60
+            )
+            suggestion = "\n".join([f"- {s[0].strftime('%I:%M %p')} to {s[1].strftime('%I:%M %p')}" for s in alt_slots[:3]])
+            return f"❌ That time is already booked.\nHere are some alternatives:\n{suggestion or 'No slots left today.'}"
+
+        event = create_event(summary or "Appointment", start_dt, end_dt)
+        return f"✅ Your event '{summary or 'Appointment'}' is booked on {date_str} from {start_time} to {end_time}!"
+
+    return "I'm not sure what you meant. Could you clarify whether you're checking, booking, or just chatting?" 
