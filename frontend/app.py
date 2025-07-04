@@ -2,6 +2,10 @@ import streamlit as st
 import requests
 import random
 import math
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Generate 120 stars, each with a random direction and speed
 star_styles = []
@@ -310,11 +314,13 @@ with st.form(key="custom-chat-form", clear_on_submit=True):
         unsafe_allow_html=True
     )
 
+BACKEND_URL = os.getenv("BACKEND_URL")
+
 if send_clicked and user_input.strip():
     st.session_state["messages"].append({"role": "user", "content": user_input.strip()})
     try:
         response = requests.post(
-            "https://pure-celebration-production-0dde.up.railway.app/chat",
+            BACKEND_URL,
             json={"message": user_input.strip()},
             timeout=30
         )
