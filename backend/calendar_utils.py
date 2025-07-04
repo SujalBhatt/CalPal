@@ -20,10 +20,16 @@ def get_calendar_service():
 
 def get_free_slots(start_time, end_time, duration_minutes=30):
     service = get_calendar_service()
+    # Convert to UTC and remove tzinfo for ISO format, then add 'Z' for Google API
+    start_utc = start_time.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    end_utc = end_time.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    print("DEBUG: calendarId:", TEST_CALENDAR_ID)
+    print("DEBUG: timeMin:", start_utc.isoformat() + 'Z')
+    print("DEBUG: timeMax:", end_utc.isoformat() + 'Z')
     events_result = service.events().list(
         calendarId=TEST_CALENDAR_ID,
-        timeMin=start_time.isoformat(),
-        timeMax=end_time.isoformat(),
+        timeMin=start_utc.isoformat() + 'Z',
+        timeMax=end_utc.isoformat() + 'Z',
         singleEvents=True,
         orderBy='startTime'
     ).execute()
